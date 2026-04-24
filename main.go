@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,34 +124,81 @@ func recordAudio(outputFile string, seconds int) error {
 
 
 // --- Main ---
-func main() {
-	audioFile := "riunione.wav"
 
-	// Registra 60 secondi (modificabile)
-	if err := recordAudio(audioFile, 60); err != nil {
-		fmt.Fprintf(os.Stderr, "Errore registrazione: %v\n", err)
-		os.Exit(1)
-	}
+func usage() {
+	fmt.Fprintln(os.Stderr, "Uso:")
+	fmt.Fprintln(os.Stderr, "  go run . -s <sec>  [-r]     registra (e se non -r, trascrive e sintetizza)")
+	fmt.Fprintln(os.Stderr, "  go run . -m <min>  [-r]     come sopra, in minuti")
+	fmt.Fprintln(os.Stderr, "  go run . -t <file.wav>      trascrive e sintetizza un audio esistente")
+	flag.PrintDefaults()
+}
 
-	fmt.Println("\n📝 Trascrizione in corso...")
-	transcription, err := transcribeAudio(audioFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Errore: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Println("✅ Trascrizione completata:")
-	fmt.Println(transcription)
-
+func summarize(transcription string) error {
 	fmt.Println("\n🤖 Generazione sintesi...")
 	prompt := buildSummaryPrompt(transcription)
 	summary, err := askOllama(prompt)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Errore: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	fmt.Println("\n📋 SINTESI RIUNIONE")
 	fmt.Println("==================")
 	fmt.Println(summary)
+	return nil
+}
+
+func transcribeAndSummarize(audioFile string) error {
+	fmt.Println("\n📝 Trascrizione in corso...")
+	transcription, err := transcribeAudio(audioFile)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("✅ Trascrizione completata:")
+	fmt.Println(transcription)
+
+	return summarize(transcription)
+}
+
+func main() {
+	seconds := flag.Int("s", 0, "durata registrazione in secondi")
+	minutes := flag.Int("m", 0, "durata registrazione in minuti")
+	recordOnly := flag.Bool("r", false, "registra soltanto, senza trascrivere")
+	transcribeFile := flag.String("t", "", "trascrivi (e sintetizza) un audio esistente")
+	flag.Usage = usage
+	flag.Parse()
+
+	if *transcribeFile != "" {
+		if *seconds > 0 || *minutes > 0 || *recordOnly {
+			fmt.Fprintln(os.Stderr, "Errore: -t non si combina con -s/-m/-r")
+			os.Exit(1)
+		}
+		if err := transcribeAndSummarize(*transcribeFile); err != nil {
+			fmt.Fprintf(os.Stderr, "Errore: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	duration := *seconds + *minutes*60
+	if duration <= 0 {
+		usage()
+		os.Exit(1)
+	}
+
+	audioFile := "riunione.wav"
+	if err := recordAudio(audioFile, duration); err != nil {
+		fmt.Fprintf(os.Stderr, "Errore registrazione: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *recordOnly {
+		fmt.Printf("Registrazione salvata in %s\n", audioFile)
+		return
+	}
+
+	if err := transcribeAndSummarize(audioFile); err != nil {
+		fmt.Fprintf(os.Stderr, "Errore: %v\n", err)
+		os.Exit(1)
+	}
 }
